@@ -38,7 +38,7 @@ jobs:
           cd kit && git sparse-checkout set --no-cone '/*' '!/sons/' '!/archives/' && git checkout -q
       - run: sudo mkdir -p /home/claude/bpyenv && sudo chown -R "$USER" /home/claude
       - uses: actions/cache@v4
-        with: { path: /home/claude/bpyenv, key: 'bpyenv-v1-${{ runner.os }}' }
+        with: { path: "/home/claude/bpyenv\n~/.local/share/uv/python", key: 'bpyenv-v2-${{ runner.os }}' }
       - run: bash kit/outils/ferme/installer.sh kit
       - run: bash kit/outils/ferme/morceau.sh kit/FERME.json ${{ matrix.f0 }} ${{ matrix.f1 }} seg
       - name: encrypt
@@ -66,7 +66,7 @@ jobs:
           cd seg; for f in *.enc; do [ -e "$f" ] || continue; openssl enc -d -aes-256-cbc -pbkdf2 -pass env:K -in "$f" -out "${f%.enc}" && rm "$f"; done
       - run: sudo mkdir -p /home/claude/bpyenv && sudo chown -R "$USER" /home/claude
       - uses: actions/cache/restore@v4
-        with: { path: /home/claude/bpyenv, key: 'bpyenv-v1-${{ runner.os }}' }
+        with: { path: "/home/claude/bpyenv\n~/.local/share/uv/python", key: 'bpyenv-v2-${{ runner.os }}' }
       - run: bash kit/outils/ferme/installer.sh kit
       - run: bash kit/outils/ferme/assembler.sh kit/FERME.json seg video.mp4
       - name: deliver
