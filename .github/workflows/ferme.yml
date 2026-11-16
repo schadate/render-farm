@@ -8,20 +8,18 @@ concurrency: { group: 'ferme-${{ github.ref }}', cancel-in-progress: true }
 jobs:
   plan:
     runs-on: ubuntu-latest
-    outputs: { matrice: '${{ steps.m.outputs.matrice }}', ref: '${{ steps.r.outputs.ref }}', id: '${{ steps.r.outputs.id }}', kit: '${{ steps.r.outputs.kit }}' }
+    outputs: { matrice: '${{ steps.m.outputs.matrice }}', ref: '${{ steps.r.outputs.ref }}', id: '${{ steps.r.outputs.id }}' }
     steps:
       - id: r
         env: { K: '${{ secrets.KIT_TOKEN }}' }
         run: |
-          ID="${GITHUB_REF#refs/heads/ferme/}"; KIT="$GITHUB_REPOSITORY"; REF="ferme/$ID"
-          if [ -n "$K" ]; then
-            KIT=$(curl -s -H "Authorization: Bearer $K" "https://api.github.com/user/repos?visibility=private&per_page=5" | python3 -c "import json,sys;print(json.load(sys.stdin)[0]['full_name'])")
-            REF="ferme-pub/$ID"
-          fi
-          echo "::add-mask::$KIT"; echo "id=$ID" >> $GITHUB_OUTPUT; echo "ref=$REF" >> $GITHUB_OUTPUT; echo "kit=$KIT" >> $GITHUB_OUTPUT
+          ID="${GITHUB_REF#refs/heads/ferme/}"; REF="ferme/$ID"; [ -z "$K" ] || REF="ferme-pub/$ID"
+          echo "id=$ID" >> $GITHUB_OUTPUT; echo "ref=$REF" >> $GITHUB_OUTPUT
       - id: m
-        env: { K: '${{ secrets.KIT_TOKEN || github.token }}', R: '${{ steps.r.outputs.kit }}', REF: '${{ steps.r.outputs.ref }}' }
+        env: { K: '${{ secrets.KIT_TOKEN || github.token }}', P: '${{ secrets.KIT_TOKEN }}', REF: '${{ steps.r.outputs.ref }}' }
         run: |
+          R="$GITHUB_REPOSITORY"; [ -z "$P" ] || R=$(curl -s -H "Authorization: Bearer $P" "https://api.github.com/user/repos?visibility=private&per_page=5" | python3 -c "import json,sys;print(json.load(sys.stdin)[0]['full_name'])")
+          echo "::add-mask::$R"
           git clone -q --depth 1 --branch "$REF" --filter=blob:none --no-checkout "https://x-access-token:$K@github.com/$R.git" kit
           cd kit && git sparse-checkout set outils/ferme && git checkout -q
           echo "matrice=$(python3 outils/ferme/decouper.py FERME.json)" >> $GITHUB_OUTPUT
@@ -32,8 +30,9 @@ jobs:
     strategy: { fail-fast: false, max-parallel: 20, matrix: '${{ fromJSON(needs.plan.outputs.matrice) }}' }
     steps:
       - name: fetch
-        env: { K: '${{ secrets.KIT_TOKEN || github.token }}', R: '${{ needs.plan.outputs.kit }}', REF: '${{ needs.plan.outputs.ref }}' }
+        env: { K: '${{ secrets.KIT_TOKEN || github.token }}', P: '${{ secrets.KIT_TOKEN }}', REF: '${{ needs.plan.outputs.ref }}' }
         run: |
+          R="$GITHUB_REPOSITORY"; [ -z "$P" ] || R=$(curl -s -H "Authorization: Bearer $P" "https://api.github.com/user/repos?visibility=private&per_page=5" | python3 -c "import json,sys;print(json.load(sys.stdin)[0]['full_name'])")
           echo "::add-mask::$R"
           git clone -q --depth 1 --branch "$REF" --no-checkout "https://x-access-token:$K@github.com/$R.git" kit
           cd kit && git sparse-checkout set --no-cone '/*' '!/sons/' '!/archives/' && git checkout -q
@@ -53,8 +52,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: fetch
-        env: { K: '${{ secrets.KIT_TOKEN || github.token }}', R: '${{ needs.plan.outputs.kit }}', REF: '${{ needs.plan.outputs.ref }}' }
+        env: { K: '${{ secrets.KIT_TOKEN || github.token }}', P: '${{ secrets.KIT_TOKEN }}', REF: '${{ needs.plan.outputs.ref }}' }
         run: |
+          R="$GITHUB_REPOSITORY"; [ -z "$P" ] || R=$(curl -s -H "Authorization: Bearer $P" "https://api.github.com/user/repos?visibility=private&per_page=5" | python3 -c "import json,sys;print(json.load(sys.stdin)[0]['full_name'])")
           echo "::add-mask::$R"
           git clone -q --depth 1 --branch "$REF" --no-checkout "https://x-access-token:$K@github.com/$R.git" kit
           cd kit && git sparse-checkout set --no-cone '/*' '!/archives/' && git checkout -q
