@@ -1,0 +1,83 @@
+# Ferme de rendu Dr SHTEIN — découpe une vidéo en morceaux rendus EN PARALLÈLE sur GitHub Actions, puis recolle et ajoute le son.
+# Deux modes, même fichier :
+#  • dans le kit privé : pousser une branche  ferme/<id>  (avec FERME.json à la racine) → rendu (minutes privées, 2 cœurs)
+#  • dans le dépôt public neutre : fiche sur la branche  ferme-pub/<id>  du kit, puis pousser une branche vide  ferme/<id>  dans le
+#    dépôt public → le kit est lu avec le secret KIT_TOKEN
+#    (minutes illimitées, 4 cœurs, 20 machines à la fois). Rien du contenu n'apparaît : journaux réduits, morceaux chiffrés.
+# Résultat : la vidéo est poussée dans le kit sur la branche  rendus/<id>  (video.mp4).
+name: ferme
+on:
+  push:
+    branches: ['ferme/**']
+  workflow_dispatch:
+    inputs: { id: { description: 'id du rendu', required: true } }
+permissions: { contents: write }
+concurrency: { group: 'ferme-${{ github.ref }}', cancel-in-progress: true }
+env:
+  KIT_REPO: schadate/drshtein-kit
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs: { matrice: '${{ steps.m.outputs.matrice }}', ref: '${{ steps.r.outputs.ref }}', id: '${{ steps.r.outputs.id }}' }
+    steps:
+      - id: r
+        run: |
+          ID="${{ inputs.id }}"; [ -n "$ID" ] || ID="${GITHUB_REF#refs/heads/ferme/}"
+          # dans le kit lui-même : branche ferme/<id> ; depuis le dépôt public : le kit garde la fiche sur ferme-pub/<id>
+          if [ "$GITHUB_REPOSITORY" = "$KIT_REPO" ]; then REF="ferme/$ID"; else REF="ferme-pub/$ID"; fi
+          echo "id=$ID" >> $GITHUB_OUTPUT; echo "ref=$REF" >> $GITHUB_OUTPUT
+      - uses: actions/checkout@v4
+        with: { repository: '${{ env.KIT_REPO }}', ref: '${{ steps.r.outputs.ref }}', token: '${{ secrets.KIT_TOKEN || github.token }}', sparse-checkout: 'outils/ferme', sparse-checkout-cone-mode: true, path: kit }
+      - id: m
+        run: |
+          echo "matrice=$(python3 kit/outils/ferme/decouper.py kit/FERME.json)" >> $GITHUB_OUTPUT
+  morceau:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy: { fail-fast: false, max-parallel: 20, matrix: '${{ fromJSON(needs.plan.outputs.matrice) }}' }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: '${{ env.KIT_REPO }}'
+          ref: '${{ needs.plan.outputs.ref }}'
+          token: '${{ secrets.KIT_TOKEN || github.token }}'
+          path: kit
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/sons/
+            !/archives/
+      - run: sudo mkdir -p /home/claude/bpyenv && sudo chown -R "$USER" /home/claude
+      - uses: actions/cache@v4
+        with: { path: /home/claude/bpyenv, key: 'bpyenv-v1-${{ runner.os }}' }
+      - run: bash kit/outils/ferme/installer.sh kit
+      - run: bash kit/outils/ferme/morceau.sh kit/FERME.json ${{ matrix.f0 }} ${{ matrix.f1 }} seg
+      - name: chiffrer (dépôt public seulement)
+        env: { K: '${{ secrets.KIT_TOKEN }}' }
+        run: |
+          cd seg; if [ -n "$K" ]; then for f in *.mp4; do openssl enc -aes-256-cbc -pbkdf2 -pass env:K -in "$f" -out "$f.enc" && rm "$f"; done; fi
+      - uses: actions/upload-artifact@v4
+        with: { name: 'seg-${{ matrix.f0 }}', path: seg/, retention-days: 1 }
+  assemblage:
+    needs: [plan, morceau]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ env.KIT_REPO }}', ref: '${{ needs.plan.outputs.ref }}', token: '${{ secrets.KIT_TOKEN || github.token }}', path: kit, sparse-checkout-cone-mode: false, sparse-checkout: "/*\n!/archives/" }
+      - uses: actions/download-artifact@v4
+        with: { pattern: 'seg-*', path: seg, merge-multiple: true }
+      - env: { K: '${{ secrets.KIT_TOKEN }}' }
+        run: |
+          cd seg; for f in *.enc; do [ -e "$f" ] || continue; openssl enc -d -aes-256-cbc -pbkdf2 -pass env:K -in "$f" -out "${f%.enc}" && rm "$f"; done
+      - run: sudo mkdir -p /home/claude/bpyenv && sudo chown -R "$USER" /home/claude
+      - uses: actions/cache/restore@v4
+        with: { path: /home/claude/bpyenv, key: 'bpyenv-v1-${{ runner.os }}' }
+      - run: bash kit/outils/ferme/installer.sh kit
+      - run: bash kit/outils/ferme/assembler.sh kit/FERME.json seg video.mp4
+      - name: renvoyer la vidéo dans le kit (branche rendus/<id>)
+        run: |
+          cd kit; git config user.name ferme; git config user.email ferme@users.noreply.github.com
+          git checkout -q --orphan "rendus/${{ needs.plan.outputs.id }}"; git rm -rq --cached . ; cp ../video.mp4 video.mp4
+          git add -f video.mp4; git commit -qm "rendu ${{ needs.plan.outputs.id }}"; git push -qf origin "HEAD:refs/heads/rendus/${{ needs.plan.outputs.id }}"
+          echo "ENVOYÉ rendus/${{ needs.plan.outputs.id }}"
